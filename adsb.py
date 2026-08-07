@@ -1,4 +1,4 @@
-"""ADS-B aggregator clients and a low-memory response parser.
+﻿"""ADS-B aggregator clients and a low-memory response parser.
 
 All three supported aggregators return the same tar1090 / ADSBExchange-v2 shape:
 
@@ -19,7 +19,7 @@ import json
 
 from . import geo, model
 
-DEFAULT_UA = "SkyScope-Tildagon/0.0.1 (+https://github.com/TimNe0/skyscope)"
+DEFAULT_UA = "SkyScope-Tildagon/0.0.2 (+https://github.com/TimNe0/skyscope)"
 
 # adsb.lol caps radius requests at 250 nm; we cap much lower to protect memory.
 MAX_RADIUS_NM = 100
@@ -337,3 +337,4 @@ def _short_error(exc):
     if "MEMORY" in name:
         return "OUT OF MEMORY"
     return name[:18]
+

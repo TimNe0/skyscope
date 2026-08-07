@@ -33,10 +33,11 @@ class CtxRenderer:
 
     def begin(self, ctx):
         """Bind the ctx handed to draw() for this frame."""
-        if ctx is not self.ctx:
-            self.ctx = ctx
-            # ctx.LEFT and friends live on the canvas object, not the module,
-            # so the lookup table can only be built once a canvas exists.
+        self.ctx = ctx
+        if self._align is None:
+            # ctx.LEFT and friends live on the canvas object rather than the
+            # module, so this table can only be built once a canvas exists --
+            # but the values are constants, so build it once and not per frame.
             self._align = {"left": ctx.LEFT, "center": ctx.CENTER, "right": ctx.RIGHT}
         return self
 

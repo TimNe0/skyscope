@@ -1,4 +1,4 @@
-"""SkyScope -- a live ADS-B flight radar for the EMF Tildagon / Spaceagon badge.
+﻿"""SkyScope -- a live ADS-B flight radar for the EMF Tildagon / Spaceagon badge.
 
 Screens: the radar scope, a settings menu, a per-aircraft detail page and an
 about page. One async task does everything; network polling happens inside
@@ -19,7 +19,7 @@ from . import adsb, conf as C, fixtures, model, radar_view
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
@@ -414,11 +414,14 @@ class FlightRadarApp(app.App):
 
     def _draw_status_page(self, renderer):
         display = self.cfg["display"]
+        if self.snapshot.state == model.STATE_OK:
+            status = "%d contacts" % len(self.snapshot.contacts)
+        else:
+            status = self.snapshot.message or self.snapshot.state.upper()
         lines = [
             "Radar on hexpansion %d" % display["slot"],
             self.cfg["location"]["name"],
-            "%d contacts" % len(self.snapshot.contacts),
-            self.snapshot.message or self.snapshot.state,
+            status,
             "",
             "LEFT settings  CANCEL exit",
         ]
@@ -492,3 +495,4 @@ def _bearing_to_led(bearing):
 
 
 __app_export__ = FlightRadarApp
+
