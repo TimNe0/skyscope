@@ -1,0 +1,10 @@
+# Keep dev-only files out of the tarball the app store downloads onto badges.
+tests/ export-ignore
+tools/ export-ignore
+Makefile export-ignore
+metadata.json export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+README.md export-ignore
+controls.md export-ignore
+TILDAGON_FLIGHT_RADAR_SPEC.md export-ignore

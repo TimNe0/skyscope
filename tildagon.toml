@@ -1,0 +1,14 @@
+[app]
+name = "SkyScope"
+category = "Apps"
+wifi_preference = true
+
+[entry]
+class = "FlightRadarApp"
+
+[metadata]
+author = "TimNe0"
+license = "MIT"
+url = "https://github.com/TimNe0/skyscope"
+description = "Live ADS-B flight radar: set location + range, see nearby aircraft on a radar scope."
+version = "0.0.1"
