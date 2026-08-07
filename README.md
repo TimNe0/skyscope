@@ -14,11 +14,12 @@ Pure MicroPython — it runs on stock Tildagon OS, with no custom firmware.
 
 | Radar scope | Aircraft detail | Touch ring |
 |---|---|---|
-| ![Radar scope showing ten aircraft around East Essex Hackspace](docs/radar.png) | ![Detail page for an Embraer E190](docs/detail.png) | ![Scope with an east sector highlighted and two armed alert arcs](docs/touch.png) |
+| ![Radar scope showing aircraft silhouettes around East Essex Hackspace](docs/radar.png) | ![Detail page for a Cargolux 747 flying Houston to Luxembourg](docs/detail.png) | ![Scope with an east sector highlighted and two armed alert arcs](docs/touch.png) |
 
-*Real traffic over Essex, captured from the badge simulator. On the right, the
-touch ring: a highlighted bearing with the nearest aircraft in it selected, and
-two armed alert sectors pulsing amber on the outer ring.*
+*Real traffic over Essex, captured from the badge simulator. In the middle, a
+Cargolux 747-8 at 39,000 ft on its way from Houston to Luxembourg. On the right,
+the touch ring: a highlighted bearing with the nearest aircraft in it selected,
+and two armed alert sectors pulsing amber on the outer ring.*
 
 ## Features
 
@@ -27,6 +28,9 @@ two armed alert sectors pulsing amber on the outer ring.*
 - **Collision-avoiding labels** — the nearest aircraft get labels, and any block
   that would land on another label, another aircraft or the scope's own chrome is
   dropped instead of drawn on top. Busy airspace stays readable.
+- **Aircraft-shaped contacts** — a top-down airliner silhouette turned to each
+  aircraft's track, not a bare arrow. Rotations are cached in 5° steps so
+  redrawing thirty of them costs nothing.
 - **Configurable observer** — your own saved "Home" first, then presets led by
   East Essex Hackspace and the EMF site at Eastnor Deer Park; plus manual lat/lon
   entry and an approximate IP lookup.
@@ -34,8 +38,9 @@ two armed alert sectors pulsing amber on the outer ring.*
 - **Units** — aviation (ft/kt/nm), metric (m, m/s, km) or mixed (m, km/h, km).
 - **Three data sources** — adsb.lol, adsb.fi and airplanes.live, switchable from
   the menu if one starts rate-limiting or requiring a key.
-- **Aircraft detail page** — type, registration, altitude, speed, vertical rate,
-  track, range, bearing and squawk for any selected contact.
+- **Aircraft detail page** — where the flight came from and where it is going,
+  plus airline, type, registration, altitude, speed, vertical rate, track,
+  range, bearing and squawk.
 - **Touch ring** (2026 Spaceagon) — the twelve capacitive pads work as a bearing
   input: touch a direction to pick the nearest aircraft there, slide round the
   bezel to sweep the horizon, hold to arm a traffic alert, filter to one sector,
@@ -149,6 +154,13 @@ SkyScope is a polite client of community-run, volunteer-funded aggregators:
   one request per second and are for personal, non-commercial use
 - [airplanes.live](https://airplanes.live/)
 
+**Routes** come from [adsbdb.com](https://www.adsbdb.com/), also free and
+keyless. ADS-B carries no route information — an aircraft broadcasts a callsign,
+not an itinerary — so origin and destination need a separate lookup. SkyScope
+only makes that request when you open an aircraft's detail page, one flight at a
+time, and caches the answer (including "no route known") so the same flight is
+never asked for twice.
+
 Aircraft data is contributed by the volunteers who run the feeders. Please do not
 lower the poll interval below the 10 s floor, and consider feeding data back to
 one of these networks if you have a receiver.
@@ -236,6 +248,7 @@ shows fake data while pretending it is live.
 | `model.py` | `Contact` / `Snapshot`, distance filtering and capping |
 | `radar_view.py` | scope, detail and status rendering |
 | `touch.py` | 2026 touch ring: sector maths and the gesture machine |
+| `routes.py` | on-demand origin/destination lookup, with a bounded cache |
 | `settings_view.py` | menu tree over the config |
 | `dialogs.py` | coordinate entry keypad |
 | `render_ctx.py` | renderer over the badge's ctx canvas |

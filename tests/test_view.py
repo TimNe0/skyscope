@@ -292,7 +292,7 @@ class TestDetailView(unittest.TestCase):
         r = RecordingRenderer()
         contacts, _ = adsb.parse(fixtures.SAMPLE_RESPONSE)
         c = model.prepare(contacts, 51.53, -1.08, 500.0, 30)[0]
-        radar_view.detail_view(r, c, U.AVIATION, "East Essex Hackspace")
+        radar_view.detail_view(r, c, U.AVIATION)
         texts = r.texts()
         for key in ("TYPE", "REG", "ALT", "SPD", "V/S", "TRK", "RNG", "BRG", "SQK"):
             self.assertIn(key, texts)

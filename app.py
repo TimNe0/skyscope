@@ -15,11 +15,11 @@ from events.input import BUTTON_TYPES, Buttons
 from system.eventbus import eventbus
 from system.patterndisplay.events import PatternDisable, PatternEnable
 
-from . import adsb, conf as C, fixtures, model, radar_view, touch, units as U
+from . import adsb, conf as C, fixtures, model, radar_view, routes, touch, units as U
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.1.2"
+VERSION = "0.2.0"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
@@ -73,14 +73,38 @@ class FlightRadarApp(app.App):
         self._allow_demo = False
         self._demo = None
         self._led_timer = 0
+        # True while we, rather than the OS pattern generator, are driving the
+        # ring. Tracked so the LEDs can be handed back the moment the app stops
+        # being on screen -- otherwise they stay frozen on the last frame.
+        self._leds_owned = False
+
+        self.routes = routes.RouteLookup()
+        self._route_wanted = None
 
         # External panel, only built when the user selects a hexpansion target.
         self._external = None
         self._external_error = None
 
-        eventbus.emit(PatternDisable())
-
     # -- lifecycle -----------------------------------------------------------
+
+    def background_update(self, delta):
+        """Runs even when the app is not on screen.
+
+        This is the only place that notices focus being taken away by something
+        other than our own CANCEL handler -- run() blocks inside render_update()
+        while backgrounded, so it cannot. Without this the ring keeps whatever
+        the last radar frame left on it, with the OS pattern still suppressed,
+        and the LEDs look stuck on.
+        """
+        wanted = getattr(self, "_foreground", True) and bool(self.cfg["led_ring"])
+        if wanted == self._leds_owned:
+            return
+        self._leds_owned = wanted
+        if wanted:
+            eventbus.emit(PatternDisable())
+        else:
+            self._leds_off()
+            eventbus.emit(PatternEnable())
 
     async def run(self, render_update):
         await self._connect_wifi(render_update)
@@ -97,6 +121,15 @@ class FlightRadarApp(app.App):
                 self.settings.pending = None
                 await self.settings.run_job(job, render_update)
 
+            if self._route_wanted is not None:
+                # Blocking, but small and only when a detail page asks for it.
+                # Draw first so the page shows "looking up route..." rather
+                # than freezing on a blank line.
+                await render_update()
+                callsign = self._route_wanted
+                self._route_wanted = None
+                self.routes.fetch(callsign, user_agent=USER_AGENT)
+
             if self._poll_due(now):
                 self.snapshot.state = model.STATE_UPDATING
                 await render_update()
@@ -106,8 +139,8 @@ class FlightRadarApp(app.App):
             if regained_focus:
                 # Returning to the foreground: refresh straight away rather
                 # than showing however stale the last snapshot has become.
+                # background_update() has already reclaimed the LED ring.
                 self._next_poll_ms = time.ticks_ms()
-                eventbus.emit(PatternDisable())
 
     async def _connect_wifi(self, render_update):
         self._set_status(model.STATE_CONNECTING, "CONNECTING WIFI")
@@ -235,6 +268,10 @@ class FlightRadarApp(app.App):
             if self.notification._is_closed():
                 self.notification = None
 
+        # The ring is driven on every screen. Skipping it while a menu was open
+        # used to leave the LEDs frozen on the last radar frame.
+        self._drive_leds(delta)
+
         if self.screen == SCREEN_SETTINGS:
             # Menu owns the buttons while it is open.
             self.settings.update(delta)
@@ -244,7 +281,6 @@ class FlightRadarApp(app.App):
         if self.screen == SCREEN_RADAR:
             self._handle_touch(delta)
         self._handle_buttons()
-        self._drive_leds(delta)
 
     # -- touch ring ----------------------------------------------------------
 
@@ -386,6 +422,7 @@ class FlightRadarApp(app.App):
                 # A touched aircraft is the obvious thing for CONFIRM to act
                 # on; without one it keeps its original job.
                 self.screen = SCREEN_DETAIL
+                self._request_route()
                 return
             modes = C.LABEL_MODES
             idx = (modes.index(self.cfg["labels"]) + 1) % len(modes)
@@ -412,6 +449,7 @@ class FlightRadarApp(app.App):
 
     def _shutdown(self):
         self.button_states.clear()
+        self._leds_owned = False
         self._leds_off()
         eventbus.emit(PatternEnable())
         self.minimise()
@@ -443,9 +481,22 @@ class FlightRadarApp(app.App):
         self.screen = SCREEN_ABOUT
 
     def _open_detail(self, icao):
-        self.settings.close()
+        if self.settings is not None:
+            self.settings.close()
         self.selected_icao = icao
         self.screen = SCREEN_DETAIL
+        self._request_route()
+
+    def _request_route(self):
+        """Queue a route lookup for the selected contact, if it needs one."""
+        contact = self._selected_contact()
+        if contact is None or not contact.callsign:
+            self._route_wanted = None
+            return
+        if self.routes.known(contact.callsign):
+            self._route_wanted = None
+        else:
+            self._route_wanted = contact.callsign
 
     def _settings_changed(self, keys):
         if "location" in keys or "radius_km" in keys or "provider" in keys:
@@ -453,8 +504,6 @@ class FlightRadarApp(app.App):
             self.force_refresh()
         if "display" in keys:
             self._release_external()
-        if "led_ring" in keys and not self.cfg["led_ring"]:
-            self._leds_off()
         if "touch_mode" in keys:
             # A mode change should not leave the previous mode's filter or
             # rotation stuck on the scope.
@@ -522,7 +571,9 @@ class FlightRadarApp(app.App):
                 self.screen = SCREEN_RADAR
             else:
                 radar_view.detail_view(
-                    renderer, contact, self.cfg["units"], self.cfg["location"]["name"]
+                    renderer, contact, self.cfg["units"],
+                    route=self.routes.get(contact.callsign),
+                    route_pending=self._route_wanted is not None,
                 )
                 return
         if self.screen == SCREEN_ABOUT:
@@ -555,6 +606,7 @@ class FlightRadarApp(app.App):
         return [
             "Live ADS-B flight radar",
             provider.attribution,
+            routes.ATTRIBUTION,
             "Poll %ds - radius %dkm" % (self.cfg["interval_s"], self.cfg["radius_km"]),
             self._touch_hint(),
             "MIT licence",
@@ -573,7 +625,7 @@ class FlightRadarApp(app.App):
     # -- LED ring ------------------------------------------------------------
 
     def _drive_leds(self, delta):
-        if not self.cfg["led_ring"]:
+        if not self.cfg["led_ring"] or not self._leds_owned:
             return
         self._led_timer += delta
         if self._led_timer < 200:
@@ -609,8 +661,10 @@ class FlightRadarApp(app.App):
                     frame[neighbour] = (0, 34, 12)
             frame[slot] = (0, 220, 80)
 
-        if self._active_sector is not None:
-            bearing = self.view.screen_bearing(touch.bearing_of(self._active_sector))
+        # White marks the pad under the finger only. The selection itself stays
+        # sticky, but a white LED that never went out read as stuck.
+        if self.touch.sector is not None:
+            bearing = self.view.screen_bearing(touch.bearing_of(self.touch.sector))
             frame[_led_slot(bearing)] = (200, 200, 200)
 
         for i in range(12):

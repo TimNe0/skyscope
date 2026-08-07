@@ -34,8 +34,47 @@ CARDINAL_R = 82
 HEADER_Y = -111         # range label, just outside the outer ring
 STATUS_Y = 111
 
-GLYPH = ((0.0, -5.0), (3.6, 4.2), (0.0, 1.8), (-3.6, 4.2))
 TRAIL_MAX = 5
+
+# Top-down airliner silhouette, nose towards -y, about 14 px across the wings.
+# Traced once round the outline: nose, down the right side of the fuselage, out
+# and back along the right wing, the right tailplane, across the tail, then the
+# mirror image up the left side.
+_PLANE_OUTLINE = (
+    (0.0, -7.5), (1.0, -5.0), (1.0, -1.6),
+    (7.0, 1.4), (7.0, 2.8), (1.0, 1.4),
+    (1.0, 4.4), (3.0, 6.2), (3.0, 7.2),
+    (0.0, 5.8),
+    (-3.0, 7.2), (-3.0, 6.2), (-1.0, 4.4),
+    (-1.0, 1.4), (-7.0, 2.8), (-7.0, 1.4),
+    (-1.0, -1.6), (-1.0, -5.0),
+)
+
+
+def _centred(points):
+    """Shift a glyph so its centroid is the origin, and it sits on the fix."""
+    cy = sum(p[1] for p in points) / float(len(points))
+    return tuple((x, y - cy) for x, y in points)
+
+
+PLANE = _centred(_PLANE_OUTLINE)
+
+# Rotating an 18-point outline for every contact every frame is real work on an
+# ESP32, and a 5 degree step is finer than the screen can show. Rotations are
+# built once and shared by every aircraft on the same heading.
+_ROTATION_STEP = 5
+_rotated_cache = {}
+
+
+def plane_glyph(track_deg):
+    """The plane outline rotated to a track, from a shared cache."""
+    key = int((track_deg % 360.0) / _ROTATION_STEP) % (360 // _ROTATION_STEP)
+    points = _rotated_cache.get(key)
+    if points is None:
+        angle = key * _ROTATION_STEP
+        points = tuple(geo.rotate(x, y, angle) for x, y in PLANE)
+        _rotated_cache[key] = points
+    return points
 
 
 class RadarView:
@@ -258,26 +297,16 @@ class RadarView:
                 colour = SELECT
                 r.circle(x, y, 9, SELECT)
 
-            # The glyph points along the track as drawn, so it turns with the
-            # scope in course-up mode.
+            # The plane points along its track as drawn, so it turns with the
+            # scope in course-up mode. The silhouette shows heading on its own,
+            # which is why there is no separate heading vector.
             track = self.screen_bearing(c.track_deg) if c.track_deg is not None else 0.0
-            pts = []
-            for gx, gy in GLYPH:
-                rx, ry = geo.rotate(gx, gy, track)
-                pts.append((x + rx, y + ry))
-            r.poly(pts, colour, fill=True)
-
-            # Heading vector, length scaled by ground speed.
-            if c.track_deg is not None and not c.on_ground:
-                length = 8.0
-                if c.gs_kt:
-                    length = 6.0 + min(c.gs_kt, 600.0) / 60.0
-                ux, uy = geo.bearing_to_unit(track)
-                r.line(x + ux * 5, y + uy * 5, x + ux * length, y + uy * length, colour)
+            r.poly([(x + rx, y + ry) for rx, ry in plane_glyph(track)],
+                   colour, fill=True)
 
             # Every glyph reserves its own space, so a label never lands on
             # another aircraft.
-            placed.append((x - 6, y - 6, x + 6, y + 6))
+            placed.append((x - 8, y - 8, x + 8, y + 8))
 
         # drawn is sorted by distance, so this labels the nearest aircraft first
         # and gives up on any whose block would collide with one already drawn --
@@ -414,10 +443,31 @@ def status_view(r, title, lines, colour=STATUS):
     r.flush()
 
 
-def detail_view(r, c, unit, obs_name):
-    """Full readout for one selected contact."""
+def detail_view(r, c, unit, route=None, route_pending=False):
+    """Full readout for one selected contact, including its route if known."""
     r.clear(BG)
-    r.text(c.label, 0, -84, SELECT, 17, "center")
+    r.text(c.label, 0, -97, SELECT, 16, "center")
+
+    # The framebuffer backend only has framebuf's ASCII font, so the arrow has
+    # to degrade to something it can actually draw.
+    arrow = "→" if getattr(r, "vector", True) else ">"
+
+    if route is not None:
+        if route.airline:
+            r.text(route.airline[:24], 0, -81, LABEL_DIM, 8, "center")
+        r.text(
+            "%s %s %s" % (route.origin or "???", arrow, route.destination or "???"),
+            0, -64, CONTACT, 15, "center",
+        )
+        cities = "%s %s %s" % (
+            route.origin_city or "?", arrow, route.destination_city or "?",
+        )
+        r.text(cities[:30], 0, -48, LABEL_DIM, 8, "center")
+    elif route_pending:
+        r.text("looking up route...", 0, -64, LABEL_DIM, 10, "center")
+    else:
+        r.text("route unknown", 0, -64, LABEL_DIM, 10, "center")
+
     rows = (
         ("TYPE", c.ac_type or "---"),
         ("REG", c.reg or "---"),
@@ -430,8 +480,7 @@ def detail_view(r, c, unit, obs_name):
         ("SQK", c.squawk or "---"),
     )
     for i, (k, v) in enumerate(rows):
-        y = -58 + i * 15
-        r.text(k, -52, y, LABEL_DIM, 10, "left")
-        r.text(v, 58, y, LABEL, 11, "right")
-    r.text("from " + obs_name, 0, 92, GRID_BRIGHT, 8, "center")
+        y = -30 + i * 13
+        r.text(k, -52, y, LABEL_DIM, 9, "left")
+        r.text(v, 58, y, LABEL, 10, "right")
     r.flush()
