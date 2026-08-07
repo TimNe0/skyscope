@@ -38,9 +38,16 @@ MIN_RADIUS_KM = 5
 # the Southend and London approach traffic.
 EEHACK = ("East Essex Hackspace", 51.5972, 0.671394)
 
+# The EMF camp site: Eastnor Deer Park, Eastnor, Herefordshire (OSM centroid).
+# EMF's own weather example quotes 52.039554, -2.378344, about 170 m north --
+# indistinguishable at radar ranges.
+EMF = ("EMF (Eastnor Deer Park)", 52.038012, -2.377969)
+
+# Order matters: the settings menu shows Home first, then these. East Essex
+# Hackspace leads as the default observer, with the EMF site next.
 PRESETS = (
     EEHACK,
-    ("EMF (Eastnor)", 52.039554, -2.378344),
+    EMF,
     ("London", 51.5074, -0.1278),
     ("Manchester", 53.4808, -2.2426),
     ("Edinburgh", 55.9533, -3.1883),

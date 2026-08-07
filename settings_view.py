@@ -168,20 +168,29 @@ class SettingsView:
     # -- location ------------------------------------------------------------
 
     def _open_location(self):
-        items = [name for name, _lat, _lon in C.PRESETS]
-        if self.cfg["home"]["lat"] is not None:
-            items.append("Home")
-        items += ["Save here as Home", "Manual entry", "Auto (IP)", BACK]
+        # Your own place first, then the fixed presets. Home is always present
+        # even when unset, so the customisable slot never moves around.
+        items = [_home_label(self.cfg)]
+        items += [name for name, _lat, _lon in C.PRESETS]
+        items += ["Set Home to here", "Manual entry", "Auto (IP)", BACK]
         self._open(items, self._select_location)
 
     def _select_location(self, item, idx):
         if item == BACK:
             self._back()
+        elif idx == 0:
+            home = self.cfg["home"]
+            if home.get("lat") is None:
+                # Nothing saved yet, so go straight to defining it.
+                self.pending = lambda ru: self._enter_coords(ru, as_home=True)
+            else:
+                self._set_location(home.get("name") or "Home",
+                                   home["lat"], home["lon"], "home")
         elif item == "Manual entry":
             self.pending = self._enter_coords
         elif item == "Auto (IP)":
             self.pending = self._locate_by_ip
-        elif item == "Save here as Home":
+        elif item == "Set Home to here":
             place = self.cfg["location"]
             self.cfg["home"] = {
                 "name": "Home", "lat": place["lat"], "lon": place["lon"],
@@ -189,9 +198,6 @@ class SettingsView:
             self._changed("home")
             self._notify("Home saved")
             self._open_location()
-        elif item == "Home":
-            home = self.cfg["home"]
-            self._set_location("Home", home["lat"], home["lon"], "home")
         else:
             for name, lat, lon in C.PRESETS:
                 if name == item:
@@ -204,20 +210,28 @@ class SettingsView:
         }
         self._changed("location")
 
-    async def _enter_coords(self, render_update):
+    async def _enter_coords(self, render_update, as_home=False):
         from .dialogs import CoordDialog
 
-        lat = await _ask_number(self.app, render_update, "Latitude", CoordDialog)
+        prompt = "Home latitude" if as_home else "Latitude"
+        lat = await _ask_number(self.app, render_update, prompt, CoordDialog)
         if lat is None:
             return
-        lon = await _ask_number(self.app, render_update, "Longitude", CoordDialog)
+        prompt = "Home longitude" if as_home else "Longitude"
+        lon = await _ask_number(self.app, render_update, prompt, CoordDialog)
         if lon is None:
             return
         if not geo.valid_lat(lat) or not geo.valid_lon(lon):
             self._notify("Out of range")
             return
-        self._set_location("Manual", lat, lon, "manual")
-        self._notify("Location set")
+        if as_home:
+            self.cfg["home"] = {"name": "Home", "lat": lat, "lon": lon}
+            self._changed("home")
+            self._set_location("Home", lat, lon, "home")
+            self._notify("Home set")
+        else:
+            self._set_location("Manual", lat, lon, "manual")
+            self._notify("Location set")
         self._back()
 
     async def _locate_by_ip(self, render_update):
@@ -389,6 +403,13 @@ class SettingsView:
 
 def _onoff(value):
     return "on" if value else "off"
+
+
+def _home_label(cfg):
+    home = cfg.get("home") or {}
+    if home.get("lat") is None:
+        return "Home (not set)"
+    return "Home"
 
 
 def _index_of(choices, value):

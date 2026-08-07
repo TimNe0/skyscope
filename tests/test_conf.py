@@ -72,6 +72,41 @@ class TestValidation(unittest.TestCase):
             self.assertEqual(C.validate(junk)["radius_km"], 40)
 
 
+class TestPresets(unittest.TestCase):
+    def test_east_essex_hackspace_leads_and_is_the_default(self):
+        self.assertEqual(C.PRESETS[0][0], "East Essex Hackspace")
+        self.assertEqual(C.validate({})["location"]["name"], C.PRESETS[0][0])
+
+    def test_emf_is_second(self):
+        self.assertEqual(C.PRESETS[1][0], "EMF (Eastnor Deer Park)")
+
+    def test_emf_coordinates_are_in_eastnor_deer_park(self):
+        from skyscope import geo
+
+        _name, lat, lon = C.PRESETS[1]
+        # OSM puts Eastnor Deer Park at 52.0380, -2.3780; EMF's own weather
+        # example quotes a point ~170 m away. Either is fine, a mistyped
+        # coordinate is not.
+        self.assertLess(geo.haversine_km(lat, lon, 52.0380, -2.3780), 1.0)
+
+    def test_every_preset_has_sane_coordinates(self):
+        from skyscope import geo
+
+        names = set()
+        for name, lat, lon in C.PRESETS:
+            self.assertTrue(name and isinstance(name, str))
+            self.assertNotIn(name, names, "duplicate preset name")
+            names.add(name)
+            self.assertTrue(geo.valid_lat(lat), name)
+            self.assertTrue(geo.valid_lon(lon), name)
+
+    def test_preset_names_fit_the_menu(self):
+        # The Menu shrinks long items, but beyond ~28 characters they become
+        # unreadable on a 240px round screen.
+        for name, _lat, _lon in C.PRESETS:
+            self.assertLessEqual(len(name), 28, name)
+
+
 class TestRadiusSteps(unittest.TestCase):
     def test_zoom_out(self):
         self.assertEqual(C.next_radius(40, 1), 80)

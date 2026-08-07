@@ -65,3 +65,7 @@ Manual latitude/longitude entry uses the firmware's keypad dialog with a
 SkyScope-specific alphabet — `0123456789.-` — so southern latitudes and western
 longitudes can actually be typed. `Done` commits, `Cancel` (via the `...` key)
 abandons the entry and leaves the location unchanged.
+
+The same dialog appears when you pick **Home** before it has been set: entering
+coordinates there saves them as Home *and* moves the observer to them, so the
+customisable slot at the top of the list is never a dead end.

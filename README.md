@@ -27,8 +27,9 @@ two armed alert sectors pulsing amber on the outer ring.*
 - **Collision-avoiding labels** — the nearest aircraft get labels, and any block
   that would land on another label, another aircraft or the scope's own chrome is
   dropped instead of drawn on top. Busy airspace stays readable.
-- **Configurable observer** — presets (including East Essex Hackspace and EMF at
-  Eastnor), a saved "Home", manual lat/lon entry, or an approximate IP lookup.
+- **Configurable observer** — your own saved "Home" first, then presets led by
+  East Essex Hackspace and the EMF site at Eastnor Deer Park; plus manual lat/lon
+  entry and an approximate IP lookup.
 - **Configurable range** — 5–200 km, with UP/DOWN zoom through six steps.
 - **Units** — aviation (ft/kt/nm), metric (m, m/s, km) or mixed (m, km/h, km).
 - **Three data sources** — adsb.lol, adsb.fi and airplanes.live, switchable from
@@ -111,7 +112,7 @@ Reached with LEFT from the radar screen.
 
 | Setting | Options |
 |---|---|
-| Location | presets, Home, manual lat/lon, approximate IP lookup |
+| Location | Home, then presets, then manual lat/lon and IP lookup |
 | Radius | 5–200 km |
 | Update | 10 / 15 / 30 / 60 s |
 | Units | aviation / metric / mixed |
@@ -122,6 +123,18 @@ Reached with LEFT from the radar screen.
 | Display | main screen or hexpansion slot 1–6 |
 | Contacts | list of current aircraft → detail page |
 | About | version, data attribution, licence |
+
+The location list is ordered so the entry you are most likely to want is at the
+top:
+
+1. **Home** — your own saved spot. Always shown, even before it is set;
+   selecting it when unset takes you straight to entering the coordinates.
+2. **East Essex Hackspace** — the default observer (Hawkwell Pavilion, Hockley).
+3. **EMF (Eastnor Deer Park)** — the camp site.
+4. London, Manchester, Edinburgh, Amsterdam, Berlin, New York.
+
+Below the places sit the actions: *Set Home to here*, *Manual entry* and
+*Auto (IP)*.
 
 Settings are stored under the `skyscope` key in the badge's shared
 `/settings.json`, so they never collide with other apps or with badge-level

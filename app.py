@@ -19,7 +19,7 @@ from . import adsb, conf as C, fixtures, model, radar_view, touch, units as U
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
@@ -640,5 +640,6 @@ def _led_slot(bearing):
 
 
 __app_export__ = FlightRadarApp
+
 
 
