@@ -12,11 +12,13 @@ Wi-Fi.
 
 Pure MicroPython — it runs on stock Tildagon OS, with no custom firmware.
 
-| Radar scope | Aircraft detail |
-|---|---|
-| ![Radar scope showing eleven aircraft around East Essex Hackspace](docs/radar.png) | ![Detail page for an Embraer E190](docs/detail.png) |
+| Radar scope | Aircraft detail | Touch ring |
+|---|---|---|
+| ![Radar scope showing ten aircraft around East Essex Hackspace](docs/radar.png) | ![Detail page for an Embraer E190](docs/detail.png) | ![Scope with an east sector highlighted and two armed alert arcs](docs/touch.png) |
 
-*Real traffic over Essex, captured from the badge simulator.*
+*Real traffic over Essex, captured from the badge simulator. On the right, the
+touch ring: a highlighted bearing with the nearest aircraft in it selected, and
+two armed alert sectors pulsing amber on the outer ring.*
 
 ## Features
 
@@ -33,6 +35,10 @@ Pure MicroPython — it runs on stock Tildagon OS, with no custom firmware.
   the menu if one starts rate-limiting or requiring a key.
 - **Aircraft detail page** — type, registration, altitude, speed, vertical rate,
   track, range, bearing and squawk for any selected contact.
+- **Touch ring** (2026 Spaceagon) — the twelve capacitive pads work as a bearing
+  input: touch a direction to pick the nearest aircraft there, slide round the
+  bezel to sweep the horizon, hold to arm a traffic alert, filter to one sector,
+  or turn the scope course-up. See [Touch ring](#touch-ring-2026-spaceagon).
 - **LED ring** points at the nearest aircraft's bearing.
 - **Sweep and trails** — optional radar-scope theatre.
 - **Settings persist** across reboots.
@@ -61,12 +67,43 @@ Then hold the reboop button for two seconds.
 | Button | Radar scope | Settings |
 |---|---|---|
 | UP / DOWN | zoom range through 5·10·20·40·80·160 km | navigate |
-| CONFIRM | cycle labels: off → callsign → full | select / edit |
+| CONFIRM | open the touched aircraft, else cycle labels | select / edit |
 | RIGHT | refresh now | item info |
 | LEFT | open settings | back |
-| CANCEL | minimise | back / close |
+| CANCEL | clear touch state, else minimise | back / close |
 
 Full details, including text entry, are in [controls.md](controls.md).
+
+## Touch ring (2026 Spaceagon)
+
+The badge's twelve capacitive pads sit in a ring, one per LED. A radar is a polar
+display and the ring is a polar input, so they map onto each other exactly:
+twelve pads, twelve 30° compass sectors, matching the ticks already drawn on the
+scope. `TOUCH01` is at the top and reads as north.
+
+**Touch** a pad to highlight that wedge and select the nearest aircraft in it —
+CONFIRM then opens its detail page. **Slide** round the bezel to sweep the
+horizon. **Hold** for about 0.8 s to trigger the mode-specific action, chosen in
+Settings → Touch:
+
+| Mode | Hold a sector to… |
+|---|---|
+| Off | nothing; the ring is ignored |
+| Scrub bearings | nothing — tap-to-pick only |
+| Hold to arm alert | watch that bearing: the arc pulses amber, the LED breathes, and a notification fires when traffic enters. Persists across reboots. |
+| Hold to filter | show only that sector, with labels expanded to cover all of it |
+| Hold for course-up | turn the scope so that bearing is at the top; ticks, letters, glyphs and LEDs all rotate with it |
+
+Holding the same sector again undoes it, and CANCEL clears everything.
+
+The 2024 Tildagon frontboard has six buttons and no touch ring, so there the
+setting is visible but inert — selecting a mode says so rather than silently
+doing nothing. The simulator stubs the touch inputs out and never fires them, so
+**this feature can only be exercised on real 2026 hardware**; the sector maths,
+gesture machine, rendering and config handling are unit-tested off-badge, but the
+pad-to-bearing orientation is the one thing that needs confirming on a badge. If
+the pads turn out to be rotated relative to the LEDs, `touch.NORTH_INDEX` is the
+single constant to change.
 
 ## Settings
 
@@ -81,6 +118,7 @@ Reached with LEFT from the radar screen.
 | Source | adsb.lol / adsb.fi / airplanes.live |
 | Labels | off / callsign / full |
 | Sweep, Trails, LED ring | on / off |
+| Touch | off / scrub / alerts / filter / course-up (2026 badge) |
 | Display | main screen or hexpansion slot 1–6 |
 | Contacts | list of current aircraft → detail page |
 | About | version, data attribution, licence |
@@ -184,6 +222,7 @@ shows fake data while pretending it is live.
 | `adsb.py` | providers plus the low-memory response walker |
 | `model.py` | `Contact` / `Snapshot`, distance filtering and capping |
 | `radar_view.py` | scope, detail and status rendering |
+| `touch.py` | 2026 touch ring: sector maths and the gesture machine |
 | `settings_view.py` | menu tree over the config |
 | `dialogs.py` | coordinate entry keypad |
 | `render_ctx.py` | renderer over the badge's ctx canvas |

@@ -1,10 +1,13 @@
-"""Draws a Snapshot as a north-up radar scope through a Renderer.
+"""Draws a Snapshot as a radar scope through a Renderer.
+
+North-up by default; `rotation` turns the scope so a chosen compass bearing is
+at the top instead, for the touch ring's course-up mode.
 
 Everything here goes through the renderer interface, so the same code drives
 the badge's ctx canvas and an external GC9A01 panel. No firmware imports.
 """
 
-from . import geo, model, units as U
+from . import geo, model, touch, units as U
 
 # --- phosphor-green theme ---------------------------------------------------
 BG = (0.0, 0.0, 0.0)
@@ -19,6 +22,9 @@ STATUS = (0.0, 0.75, 0.32)
 WARN = (1.0, 0.68, 0.10)
 ERROR = (1.0, 0.28, 0.22)
 SELECT = (1.0, 1.0, 0.45)
+WEDGE = (0.0, 0.24, 0.11)
+WEDGE_EDGE = (0.0, 0.55, 0.24)
+ARMED = (0.95, 0.62, 0.08)
 
 # --- layout (centred coordinate space, panel radius 120) --------------------
 R_SCREEN = 100          # outer range ring == the configured radius
@@ -41,8 +47,24 @@ class RadarView:
         # Bounding boxes of the labels drawn in the last frame; kept so the
         # declutter behaviour is directly assertable in tests.
         self.label_boxes = []
+
+        # Touch-ring state, all owned by the app and simply rendered here.
+        self.rotation = 0.0          # compass bearing shown at the top
+        self.active_sector = None    # highlighted wedge
+        self.armed_sectors = ()      # sectors watched in alerts mode
+        self.filter_sector = None    # when set, only this sector is drawn
+
+        self._pulse_ms = 0
         self._trails = {}
         self._trail_ts = 0
+
+    # -- geometry ------------------------------------------------------------
+
+    def screen_bearing(self, compass_bearing):
+        """Compass bearing to the bearing drawn on screen, honouring rotation."""
+        if not self.rotation:
+            return compass_bearing
+        return (compass_bearing - self.rotation) % 360.0
 
     # -- animation -----------------------------------------------------------
 
@@ -50,6 +72,8 @@ class RadarView:
         if self.conf.get("sweep"):
             # One revolution every four seconds.
             self.sweep_deg = (self.sweep_deg + delta_ms * 0.09) % 360.0
+        if self.armed_sectors:
+            self._pulse_ms = (self._pulse_ms + delta_ms) % 1600
 
     def _record_trails(self, snapshot):
         """Append the current position of each contact, once per snapshot."""
@@ -80,20 +104,31 @@ class RadarView:
         radius_km = snapshot.radius_km or conf.get("radius_km", 40)
 
         r.clear(BG)
+        # The wedge goes down first so everything else sits on top of it.
+        if self.filter_sector is not None:
+            self._draw_wedge(r, self.filter_sector, WEDGE_EDGE)
+        elif self.active_sector is not None:
+            self._draw_wedge(r, self.active_sector, WEDGE)
         self._draw_grid(r, radius_km, unit)
+        if self.armed_sectors:
+            self._draw_armed(r)
 
         if conf.get("sweep"):
             self._draw_sweep(r)
 
+        visible = self.visible_contacts(snapshot)
         if snapshot.contacts:
             self._record_trails(snapshot)
             if conf.get("trails"):
                 self._draw_trails(r, radius_km)
-            self._draw_contacts(r, snapshot, radius_km, unit, selected)
+        if visible:
+            self._draw_contacts(r, visible, radius_km, unit, selected)
         elif snapshot.ok:
-            r.text("NO CONTACTS", 0, -14, LABEL_DIM, 12, "center")
+            self.label_boxes = []
+            empty = "SECTOR CLEAR" if self.filter_sector is not None else "NO CONTACTS"
+            r.text(empty, 0, -14, LABEL_DIM, 12, "center")
 
-        self._draw_status(r, snapshot, age_s)
+        self._draw_status(r, snapshot, age_s, len(visible))
         r.flush()
 
     def _draw_grid(self, r, radius_km, unit):
@@ -101,9 +136,10 @@ class RadarView:
         for i, ring in enumerate(RINGS):
             r.circle(0, 0, ring, GRID_BRIGHT if i == len(RINGS) - 1 else GRID)
 
-        # Tick every 30 degrees.
+        # Tick every 30 degrees. Rotation moves where each compass bearing is
+        # drawn, so ticks and letters stay consistent with the contacts.
         for deg in range(0, 360, 30):
-            ux, uy = geo.bearing_to_unit(deg)
+            ux, uy = geo.bearing_to_unit(self.screen_bearing(deg))
             bright = (deg % 90) == 0
             r.line(
                 ux * TICK_INNER, uy * TICK_INNER,
@@ -113,14 +149,22 @@ class RadarView:
 
         # Cardinal letters inside the ticks.
         for deg, letter in ((0, "N"), (90, "E"), (180, "S"), (270, "W")):
-            ux, uy = geo.bearing_to_unit(deg)
+            ux, uy = geo.bearing_to_unit(self.screen_bearing(deg))
             r.text(letter, ux * CARDINAL_R, uy * CARDINAL_R, CARDINAL, 11, "center")
 
         # Observer marker.
         r.line(-4, 0, 4, 0, CARDINAL)
         r.line(0, -4, 0, 4, CARDINAL)
 
-        r.text("R " + U.fmt_radius(radius_km, unit), 0, HEADER_Y, STATUS, 13, "center")
+        header = "R " + U.fmt_radius(radius_km, unit)
+        size = 13
+        if self.rotation:
+            # Course-up: say which way is up, or the scope silently lies. The
+            # header sits near the top of a round panel, where there is only
+            # about 90px of chord, so it shrinks to make room.
+            header += "  ^" + U.fmt_bearing(self.rotation)
+            size = 10
+        r.text(header, 0, HEADER_Y, STATUS, size, "center")
 
         # Intermediate ring labels, offset onto the 045 diagonal so they do not
         # sit under the cardinal ticks or the contacts clustered near north.
@@ -141,28 +185,72 @@ class RadarView:
             ux, uy = geo.bearing_to_unit(deg)
             r.line(0, 0, ux * R_SCREEN, uy * R_SCREEN, (0.0, level, level * 0.42))
 
+    def _draw_wedge(self, r, sector, colour):
+        """Fill the 30 degree slice a touched sector covers."""
+        centre = self.screen_bearing(touch.bearing_of(sector))
+        half = touch.SECTOR_DEG / 2.0
+        steps = 5
+        pts = [(0.0, 0.0)]
+        for i in range(steps + 1):
+            b = centre - half + (touch.SECTOR_DEG * i / steps)
+            ux, uy = geo.bearing_to_unit(b)
+            pts.append((ux * R_SCREEN, uy * R_SCREEN))
+        r.poly(pts, colour, fill=True)
+
+    def _draw_armed(self, r):
+        """Thicken the outer ring across each armed sector.
+
+        Drawn on the ring rather than outside it: there is no room out there
+        without colliding with the range header, and an armed *arc* reads as
+        "watching this slice of the horizon" more directly than tick marks do.
+        """
+        # Pulse so an armed bearing is obvious without stealing attention.
+        phase = self._pulse_ms / 1600.0
+        level = 0.45 + 0.55 * abs(1.0 - 2.0 * phase)
+        colour = (ARMED[0] * level, ARMED[1] * level, ARMED[2] * level)
+        half = touch.SECTOR_DEG / 2.0 - 1.0
+        steps = 6
+        for sector in self.armed_sectors:
+            centre = self.screen_bearing(touch.bearing_of(sector))
+            prev = None
+            for i in range(steps + 1):
+                b = centre - half + (2.0 * half * i / steps)
+                ux, uy = geo.bearing_to_unit(b)
+                point = (ux * R_SCREEN, uy * R_SCREEN)
+                if prev is not None:
+                    r.line(prev[0], prev[1], point[0], point[1], colour, 3)
+                prev = point
+
     def _draw_trails(self, r, radius_km):
         for hist in self._trails.values():
             if len(hist) < 2:
                 continue
             prev = None
             for i, (dist_km, bearing) in enumerate(hist):
-                x, y = geo.polar_to_screen(dist_km, bearing, radius_km, R_SCREEN)
+                x, y = geo.polar_to_screen(
+                    dist_km, self.screen_bearing(bearing), radius_km, R_SCREEN
+                )
                 if prev is not None:
                     level = 0.18 + 0.32 * (i / float(len(hist)))
                     r.line(prev[0], prev[1], x, y, (0.0, level, level * 0.45))
                 prev = (x, y)
 
-    def _draw_contacts(self, r, snapshot, radius_km, unit, selected):
+    def _draw_contacts(self, r, drawn, radius_km, unit, selected):
         conf = self.conf
         mode = conf.get("labels", "full")
         label_count = conf.get("label_count", 6) if mode != "off" else 0
 
+        if self.filter_sector is not None:
+            # A locked sector holds far fewer aircraft, so labels can expand to
+            # cover all of them -- that is the point of filtering.
+            label_count = len(drawn) if mode != "off" else 0
+
         # Glyphs first, so labels always sit on top of them.
         placed = _reserved_boxes()
         positions = []
-        for c in snapshot.contacts:
-            x, y = geo.polar_to_screen(c.dist_km, c.bearing, radius_km, R_SCREEN)
+        for c in drawn:
+            screen_b = self.screen_bearing(c.bearing)
+            x, y = geo.polar_to_screen(c.dist_km, screen_b, radius_km, R_SCREEN)
             positions.append((x, y))
             is_sel = selected is not None and c.icao == selected
             colour = CONTACT_STALE if c.stale else CONTACT
@@ -170,7 +258,9 @@ class RadarView:
                 colour = SELECT
                 r.circle(x, y, 9, SELECT)
 
-            track = c.track_deg if c.track_deg is not None else 0.0
+            # The glyph points along the track as drawn, so it turns with the
+            # scope in course-up mode.
+            track = self.screen_bearing(c.track_deg) if c.track_deg is not None else 0.0
             pts = []
             for gx, gy in GLYPH:
                 rx, ry = geo.rotate(gx, gy, track)
@@ -189,11 +279,11 @@ class RadarView:
             # another aircraft.
             placed.append((x - 6, y - 6, x + 6, y + 6))
 
-        # snapshot.contacts is sorted by distance, so this labels the nearest
-        # aircraft first and gives up on any whose block would collide with one
-        # already drawn -- which is what keeps a busy centre readable.
+        # drawn is sorted by distance, so this labels the nearest aircraft first
+        # and gives up on any whose block would collide with one already drawn --
+        # which is what keeps a busy centre readable.
         self.label_boxes = []
-        for i, c in enumerate(snapshot.contacts):
+        for i, c in enumerate(drawn):
             if len(self.label_boxes) >= label_count:
                 break
             x, y = positions[i]
@@ -201,6 +291,15 @@ class RadarView:
             if box is not None:
                 placed.append(box)
                 self.label_boxes.append(box)
+
+    def visible_contacts(self, snapshot):
+        """Contacts the scope is currently showing, after any sector filter."""
+        if self.filter_sector is None:
+            return snapshot.contacts
+        return [
+            c for c in snapshot.contacts
+            if touch.sector_of(c.bearing) == self.filter_sector
+        ]
 
     def _place_label(self, r, c, x, y, unit, mode, placed, index, selected):
         lines = [c.label]
@@ -242,7 +341,7 @@ class RadarView:
                 return box
         return None
 
-    def _draw_status(self, r, snapshot, age_s):
+    def _draw_status(self, r, snapshot, age_s, visible_count=None):
         state = snapshot.state
         if state == model.STATE_ERROR:
             colour, text = ERROR, snapshot.message or "ERROR"
@@ -253,8 +352,15 @@ class RadarView:
         elif state == model.STATE_OK:
             colour = STATUS
             age = max(0, int(age_s))
-            shown = len(snapshot.contacts)
-            if snapshot.total > shown:
+            shown = len(snapshot.contacts) if visible_count is None else visible_count
+            if self.filter_sector is not None:
+                # Say which sector, so a filtered scope is never mistaken for
+                # an empty sky.
+                colour = WEDGE_EDGE
+                text = "%s  %d AC  %ds" % (
+                    U.fmt_bearing(touch.bearing_of(self.filter_sector)), shown, age,
+                )
+            elif snapshot.total > shown:
                 text = "%d/%d AC  %ds" % (shown, snapshot.total, age)
             else:
                 text = "%d AC  %ds" % (shown, age)

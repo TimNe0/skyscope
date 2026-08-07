@@ -19,7 +19,7 @@ import json
 
 from . import geo, model
 
-DEFAULT_UA = "SkyScope-Tildagon/0.0.2 (+https://github.com/TimNe0/skyscope)"
+DEFAULT_UA = "SkyScope-Tildagon/0.1.0 (+https://github.com/TimNe0/skyscope)"
 
 # adsb.lol caps radius requests at 250 nm; we cap much lower to protect memory.
 MAX_RADIUS_NM = 100
@@ -337,4 +337,5 @@ def _short_error(exc):
     if "MEMORY" in name:
         return "OUT OF MEMORY"
     return name[:18]
+
 

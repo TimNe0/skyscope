@@ -15,11 +15,11 @@ from events.input import BUTTON_TYPES, Buttons
 from system.eventbus import eventbus
 from system.patterndisplay.events import PatternDisable, PatternEnable
 
-from . import adsb, conf as C, fixtures, model, radar_view
+from . import adsb, conf as C, fixtures, model, radar_view, touch, units as U
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.0.2"
+VERSION = "0.1.0"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
@@ -52,6 +52,15 @@ class FlightRadarApp(app.App):
         self.screen = SCREEN_RADAR
         self.settings = None
         self.selected_icao = None
+
+        # 2026 touch ring. Absent on a 2024 badge and in the simulator, in
+        # which case every mode is a no-op.
+        self.touch = touch.TouchRing()
+        self._active_sector = None
+        # Aircraft already reported inside an armed sector, so an alert fires
+        # on arrival rather than every poll.
+        self._alerted = set()
+        self.view.armed_sectors = tuple(self.cfg["touch_alerts"])
 
         self._held = set()
         self._uptime_ms = 0
@@ -188,6 +197,11 @@ class FlightRadarApp(app.App):
         self._errors = 0
         self._backoff_s = 0
         self._schedule_next(now, cfg["interval_s"])
+        self._check_alerts()
+        if self._active_sector is not None:
+            # Keep the touched sector's selection on the aircraft that is
+            # nearest *now*, not the one that was nearest a poll ago.
+            self._select_in_sector(self._active_sector)
         # The reduced contacts are tiny; what needs collecting is the response
         # body and the per-aircraft dicts the parser churned through.
         gc.collect()
@@ -227,8 +241,100 @@ class FlightRadarApp(app.App):
             return
 
         self.view.update(delta)
+        if self.screen == SCREEN_RADAR:
+            self._handle_touch(delta)
         self._handle_buttons()
         self._drive_leds(delta)
+
+    # -- touch ring ----------------------------------------------------------
+
+    def _handle_touch(self, delta):
+        mode = self.cfg["touch_mode"]
+        if not self.touch.available or mode == touch.MODE_OFF:
+            return
+        held = self.touch.update(delta)
+
+        sector = self.touch.sector
+        if sector is not None and sector != self._active_sector:
+            # Sliding a finger round the bezel scrubs through bearings.
+            self._active_sector = sector
+            self.view.active_sector = sector
+            self._select_in_sector(sector)
+        if held is not None:
+            self._touch_hold(held, mode)
+
+    def _select_in_sector(self, sector):
+        """Select the nearest aircraft in a sector; contacts are distance-sorted."""
+        for c in self.snapshot.contacts:
+            if touch.sector_of(c.bearing) == sector:
+                self.selected_icao = c.icao
+                return
+        self.selected_icao = None
+
+    def _touch_hold(self, sector, mode):
+        label = U.fmt_bearing(touch.bearing_of(sector))
+        if mode == touch.MODE_ALERTS:
+            armed = list(self.cfg["touch_alerts"])
+            if sector in armed:
+                armed.remove(sector)
+                self.notification = Notification("Alert off " + label)
+            else:
+                armed.append(sector)
+                armed.sort()
+                self.notification = Notification("Watching " + label)
+            self.cfg["touch_alerts"] = armed
+            self.view.armed_sectors = tuple(armed)
+            self._alerted = set()
+            C.save(self.cfg)
+        elif mode == touch.MODE_FILTER:
+            if self.view.filter_sector == sector:
+                self.view.filter_sector = None
+                self.notification = Notification("Showing all")
+            else:
+                self.view.filter_sector = sector
+                self.notification = Notification("Only " + label)
+        elif mode == touch.MODE_COURSE:
+            bearing = touch.bearing_of(sector)
+            if self.view.rotation == bearing:
+                self.view.rotation = 0.0
+                self.notification = Notification("North up")
+            else:
+                self.view.rotation = bearing
+                self.notification = Notification(label + " up")
+
+    def _clear_touch_state(self):
+        """Undo whatever the ring is currently doing. Returns True if anything was."""
+        cleared = False
+        for attr, value in (("filter_sector", None), ("rotation", 0.0),
+                            ("active_sector", None)):
+            if getattr(self.view, attr) != value:
+                setattr(self.view, attr, value)
+                cleared = True
+        if self._active_sector is not None or self.selected_icao is not None:
+            cleared = True
+        self._active_sector = None
+        self.selected_icao = None
+        self.touch.release()
+        return cleared
+
+    def _check_alerts(self):
+        """Notify when an aircraft appears in a sector the user armed."""
+        armed = self.cfg["touch_alerts"]
+        if not armed:
+            self._alerted = set()
+            return
+        present = set()
+        arrival = None
+        for c in self.snapshot.contacts:
+            if touch.sector_of(c.bearing) in armed:
+                present.add(c.icao)
+                if arrival is None and c.icao not in self._alerted:
+                    arrival = c
+        self._alerted = present
+        if arrival is not None:
+            self.notification = Notification(
+                "%s %s" % (arrival.label, U.fmt_bearing(arrival.bearing))
+            )
 
     def _pressed(self, name):
         """Edge-triggered button read.
@@ -263,7 +369,10 @@ class FlightRadarApp(app.App):
             return
 
         if self._pressed("CANCEL"):
-            self._shutdown()
+            # Escape unwinds the touch ring first, so a filtered or rotated
+            # scope is never a trap you can only leave by quitting.
+            if not self._clear_touch_state():
+                self._shutdown()
             return
         if self._pressed("LEFT"):
             self._open_settings()
@@ -273,6 +382,11 @@ class FlightRadarApp(app.App):
             self.notification = Notification("Refreshing")
             return
         if self._pressed("CONFIRM"):
+            if self.selected_icao is not None and self._selected_contact() is not None:
+                # A touched aircraft is the obvious thing for CONFIRM to act
+                # on; without one it keeps its original job.
+                self.screen = SCREEN_DETAIL
+                return
             modes = C.LABEL_MODES
             idx = (modes.index(self.cfg["labels"]) + 1) % len(modes)
             self.cfg["labels"] = modes[idx]
@@ -341,6 +455,13 @@ class FlightRadarApp(app.App):
             self._release_external()
         if "led_ring" in keys and not self.cfg["led_ring"]:
             self._leds_off()
+        if "touch_mode" in keys:
+            # A mode change should not leave the previous mode's filter or
+            # rotation stuck on the scope.
+            self._clear_touch_state()
+        if "touch_alerts" in keys:
+            self.view.armed_sectors = tuple(self.cfg["touch_alerts"])
+            self._alerted = set()
 
     # -- external panel ------------------------------------------------------
 
@@ -435,6 +556,7 @@ class FlightRadarApp(app.App):
             "Live ADS-B flight radar",
             provider.attribution,
             "Poll %ds - radius %dkm" % (self.cfg["interval_s"], self.cfg["radius_km"]),
+            self._touch_hint(),
             "MIT licence",
             "",
             "CANCEL to go back",
@@ -464,15 +586,35 @@ class FlightRadarApp(app.App):
             return
         # The OS pattern generator keeps trying to reclaim the ring.
         eventbus.emit(PatternDisable())
-        for i in range(1, 13):
-            tildagonos.leds[i] = (0, 0, 0)
-        contacts = self.snapshot.contacts
+
+        # Build the frame locally rather than reading LEDs back: the composed
+        # NeoPixel wrapper is not guaranteed to support __getitem__.
+        frame = [(0, 0, 0)] * 12
+
+        # LED indices come from the *screen* bearing, so in course-up mode the
+        # ring and the display agree with each other.
+        armed = self.cfg["touch_alerts"]
+        if armed:
+            level = 0.3 + 0.7 * abs(1.0 - (self._uptime_ms % 1600) / 800.0)
+            amber = (int(230 * level), int(140 * level), 0)
+            for sector in armed:
+                bearing = self.view.screen_bearing(touch.bearing_of(sector))
+                frame[_led_slot(bearing)] = amber
+
+        contacts = self.view.visible_contacts(self.snapshot)
         if contacts and self.snapshot.ok:
-            nearest = contacts[0]
-            index = _bearing_to_led(nearest.bearing)
-            tildagonos.leds[index] = (0, 220, 80)
-            tildagonos.leds[_wrap_led(index - 1)] = (0, 34, 12)
-            tildagonos.leds[_wrap_led(index + 1)] = (0, 34, 12)
+            slot = _led_slot(self.view.screen_bearing(contacts[0].bearing))
+            for neighbour in ((slot - 1) % 12, (slot + 1) % 12):
+                if frame[neighbour] == (0, 0, 0):
+                    frame[neighbour] = (0, 34, 12)
+            frame[slot] = (0, 220, 80)
+
+        if self._active_sector is not None:
+            bearing = self.view.screen_bearing(touch.bearing_of(self._active_sector))
+            frame[_led_slot(bearing)] = (200, 200, 200)
+
+        for i in range(12):
+            tildagonos.leds[i + 1] = frame[i]
         tildagonos.leds.write()
 
     def _leds_off(self):
@@ -484,15 +626,19 @@ class FlightRadarApp(app.App):
             tildagonos.leds[i] = (0, 0, 0)
         tildagonos.leds.write()
 
+    def _touch_hint(self):
+        """One line telling the user what the ring currently does."""
+        if not self.touch.available:
+            return "Touch ring: 2026 badge only"
+        return touch.MODE_HINTS[self.cfg["touch_mode"]]
 
-def _wrap_led(i):
-    # Ring LEDs are 1..12; 0 and 13..18 belong to other parts of the badge.
-    return 1 + ((i - 1) % 12)
 
-
-def _bearing_to_led(bearing):
-    return _wrap_led(1 + int((bearing + 15) // 30))
+def _led_slot(bearing):
+    """Ring position 0-11 for a bearing. LED 1 is the top of the badge, so the
+    caller writes tildagonos.leds[slot + 1]; 0 and 13-18 are other LEDs."""
+    return int((bearing % 360.0 + 15) // 30) % 12
 
 
 __app_export__ = FlightRadarApp
+
 

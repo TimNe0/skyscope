@@ -68,6 +68,11 @@ DEFAULTS = {
     "sweep": False,
     "trails": False,
     "led_ring": True,
+    # What the 2026 touch ring does. Harmless on a 2024 badge, where there is
+    # no touch hardware and the whole thing is a no-op.
+    "touch_mode": "scrub",
+    # Sectors armed in alerts mode, as indices 0-11.
+    "touch_alerts": [],
     "display": {
         "target": "main",
         "slot": 2,
@@ -143,9 +148,25 @@ def _valid_place(place, fallback):
     }
 
 
+def _valid_sectors(value):
+    """Armed touch sectors: a sorted, deduplicated list of indices 0-11."""
+    from . import touch
+
+    if not isinstance(value, (list, tuple)):
+        return []
+    out = []
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            continue
+        if 0 <= item < touch.SECTORS and item not in out:
+            out.append(item)
+    out.sort()
+    return out
+
+
 def validate(cfg):
     """Coerce a loaded config into something every other module can trust."""
-    from . import adsb, units as U
+    from . import adsb, touch, units as U
 
     out = _deep_merge(DEFAULTS, cfg)
     out["version"] = VERSION
@@ -176,6 +197,10 @@ def validate(cfg):
     out["sweep"] = bool(out.get("sweep"))
     out["trails"] = bool(out.get("trails"))
     out["led_ring"] = bool(out.get("led_ring"))
+    out["touch_mode"] = _clamp_choice(
+        out.get("touch_mode"), touch.MODES, DEFAULTS["touch_mode"]
+    )
+    out["touch_alerts"] = _valid_sectors(out.get("touch_alerts"))
 
     display = out.get("display")
     if not isinstance(display, dict):

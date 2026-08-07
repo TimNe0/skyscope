@@ -11,7 +11,7 @@ exists inside App.run(). Those handlers park a coroutine factory on
 
 from app_components import Menu
 
-from . import adsb, conf as C, geo, units as U
+from . import adsb, conf as C, geo, touch, units as U
 
 BACK = "< Back"
 
@@ -116,6 +116,7 @@ class SettingsView:
             "Sweep: " + _onoff(cfg["sweep"]),
             "Trails: " + _onoff(cfg["trails"]),
             "LED ring: " + _onoff(cfg["led_ring"]),
+            "Touch: " + touch.MODE_LABELS[cfg["touch_mode"]],
         ]
         if C.FEATURE_HEXPANSION_DISPLAY:
             items.append("Display: " + _display_label(cfg))
@@ -139,6 +140,8 @@ class SettingsView:
             self._push(self._open_provider)
         elif item.startswith("Labels"):
             self._push(self._open_labels)
+        elif item.startswith("Touch"):
+            self._push(self._open_touch)
         elif item.startswith("Display"):
             self._push(self._open_display)
         elif item == "Contacts":
@@ -306,6 +309,35 @@ class SettingsView:
         if item != BACK:
             self.cfg["labels"] = C.LABEL_MODES[idx]
             self._changed("labels")
+        self._back()
+
+    # -- touch ring ----------------------------------------------------------
+
+    def _open_touch(self):
+        items = [touch.MODE_LABELS[m] for m in touch.MODES]
+        if self.cfg["touch_alerts"]:
+            items.append("Clear %d armed" % len(self.cfg["touch_alerts"]))
+        items.append(BACK)
+        position = _index_of(touch.MODES, self.cfg["touch_mode"])
+        self._open(items, self._select_touch, position)
+
+    def _select_touch(self, item, idx):
+        if item == BACK:
+            self._back()
+            return
+        if item.startswith("Clear "):
+            self.cfg["touch_alerts"] = []
+            self._changed("touch_alerts")
+            self._notify("Alerts cleared")
+            self._open_touch()
+            return
+        self.cfg["touch_mode"] = touch.MODES[idx]
+        self._changed("touch_mode")
+        if touch.MODES[idx] != touch.MODE_OFF and not self.app.touch.available:
+            # Say so rather than letting the setting look broken.
+            self._notify("Needs a 2026 badge")
+        else:
+            self._notify(touch.MODE_HINTS[touch.MODES[idx]])
         self._back()
 
     # -- display target ------------------------------------------------------
