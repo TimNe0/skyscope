@@ -7,4 +7,5 @@ metadata.json export-ignore
 .gitattributes export-ignore
 README.md export-ignore
 controls.md export-ignore
+docs/ export-ignore
 TILDAGON_FLIGHT_RADAR_SPEC.md export-ignore

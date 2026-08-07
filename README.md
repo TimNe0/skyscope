@@ -12,6 +12,12 @@ Wi-Fi.
 
 Pure MicroPython — it runs on stock Tildagon OS, with no custom firmware.
 
+| Radar scope | Aircraft detail |
+|---|---|
+| ![Radar scope showing eleven aircraft around East Essex Hackspace](docs/radar.png) | ![Detail page for an Embraer E190](docs/detail.png) |
+
+*Real traffic over Essex, captured from the badge simulator.*
+
 ## Features
 
 - **North-up radar scope** — three range rings, ticks every 30°, cardinal marks,
