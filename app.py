@@ -1,4 +1,4 @@
-﻿"""SkyScope -- a live ADS-B flight radar for the EMF Tildagon / Spaceagon badge.
+"""SkyScope -- a live ADS-B flight radar for the EMF Tildagon / Spaceagon badge.
 
 Screens: the radar scope, a settings menu, a per-aircraft detail page and an
 about page. One async task does everything; network polling happens inside
@@ -19,7 +19,7 @@ from . import adsb, conf as C, fixtures, model, radar_view, touch, units as U
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
