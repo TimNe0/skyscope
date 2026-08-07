@@ -113,6 +113,7 @@ class SettingsView:
             "Units: " + cfg["units"],
             "Source: " + adsb.get_provider(cfg["provider"]).name,
             "Labels: " + cfg["labels"],
+            "Max contacts: %d" % cfg["max_aircraft"],
             "Sweep: " + _onoff(cfg["sweep"]),
             "Trails: " + _onoff(cfg["trails"]),
             "LED ring: " + _onoff(cfg["led_ring"]),
@@ -140,6 +141,8 @@ class SettingsView:
             self._push(self._open_provider)
         elif item.startswith("Labels"):
             self._push(self._open_labels)
+        elif item.startswith("Max contacts"):
+            self._push(self._open_max_aircraft)
         elif item.startswith("Touch"):
             self._push(self._open_touch)
         elif item.startswith("Display"):
@@ -313,6 +316,17 @@ class SettingsView:
         if item != BACK:
             self.cfg["provider"] = adsb.PROVIDERS[idx].key
             self._changed("provider")
+        self._back()
+
+    def _open_max_aircraft(self):
+        items = ["%d" % n for n in C.MAX_AIRCRAFT_CHOICES] + [BACK]
+        self._open(items, self._select_max_aircraft,
+                   _index_of(C.MAX_AIRCRAFT_CHOICES, self.cfg["max_aircraft"]))
+
+    def _select_max_aircraft(self, item, idx):
+        if item != BACK:
+            self.cfg["max_aircraft"] = C.MAX_AIRCRAFT_CHOICES[idx]
+            self._changed("max_aircraft")
         self._back()
 
     def _open_labels(self):

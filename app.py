@@ -6,6 +6,7 @@ run(), which the scheduler only advances while the app is foregrounded, so a
 minimised SkyScope costs no battery and no API quota.
 """
 
+import asyncio
 import gc
 import time
 
@@ -19,7 +20,7 @@ from . import adsb, conf as C, fixtures, model, radar_view, routes, touch, units
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
@@ -31,7 +32,16 @@ MAX_BACKOFF_S = 300
 # Ignore button state for a moment after launch, so the press that opened the
 # app is not read as a command.
 STARTUP_GRACE_MS = 400
-LED_REFRESH_MS = 1000
+
+# The scope only changes when data arrives, so it is redrawn on demand rather
+# than at the scheduler's full rate. This is the slow tick that keeps the
+# "updated N seconds ago" counter honest while nothing else is happening.
+IDLE_REDRAW_MS = 1000
+# How often the LED frame is recomputed. It is only written to the hardware
+# when it actually differs from the last one.
+LED_INTERVAL_MS = 200
+# The OS pattern generator has to be told repeatedly to keep off the ring.
+PATTERN_SUPPRESS_MS = 1000
 
 
 class FlightRadarApp(app.App):
@@ -73,10 +83,19 @@ class FlightRadarApp(app.App):
         self._allow_demo = False
         self._demo = None
         self._led_timer = 0
+        self._pattern_timer = 0
+        # Last frame written to the ring, so unchanged frames cost no I/O.
+        self._led_frame = None
         # True while we, rather than the OS pattern generator, are driving the
         # ring. Tracked so the LEDs can be handed back the moment the app stops
         # being on screen -- otherwise they stay frozen on the last frame.
         self._leds_owned = False
+
+        # Redraw bookkeeping. Drawing every frame regardless of whether
+        # anything changed was the app's single biggest cost.
+        self._dirty = True
+        self._since_draw_ms = 0
+        self._last_draw_state = None
 
         self.routes = routes.RouteLookup()
         self._route_wanted = None
@@ -112,6 +131,7 @@ class FlightRadarApp(app.App):
             now = time.ticks_ms()
             delta = time.ticks_diff(now, self._last_tick_ms)
             self._last_tick_ms = now
+            self._since_draw_ms += delta
             self.update(delta)
 
             # Dialogs and network lookups parked by the settings menu need the
@@ -125,22 +145,72 @@ class FlightRadarApp(app.App):
                 # Blocking, but small and only when a detail page asks for it.
                 # Draw first so the page shows "looking up route..." rather
                 # than freezing on a blank line.
-                await render_update()
+                await self._render(render_update)
                 callsign = self._route_wanted
                 self._route_wanted = None
                 self.routes.fetch(callsign, user_agent=USER_AGENT)
 
-            if self._poll_due(now):
+            foreground = getattr(self, "_foreground", True)
+            if foreground and self._poll_due(now):
                 self.snapshot.state = model.STATE_UPDATING
-                await render_update()
+                await self._render(render_update)
                 self._poll(time.ticks_ms())
 
-            regained_focus = await render_update()
-            if regained_focus:
-                # Returning to the foreground: refresh straight away rather
-                # than showing however stale the last snapshot has become.
-                # background_update() has already reclaimed the LED ring.
-                self._next_poll_ms = time.ticks_ms()
+            if not foreground:
+                # render_update blocks until the app is on screen again, which
+                # is what keeps a minimised SkyScope off the network.
+                if await render_update():
+                    # Back on screen: refresh rather than showing a stale sky.
+                    self._next_poll_ms = time.ticks_ms()
+                    self._dirty = True
+            elif self._needs_draw():
+                await self._render(render_update)
+            else:
+                await asyncio.sleep(0.05)
+
+    async def _render(self, render_update):
+        self._dirty = False
+        self._since_draw_ms = 0
+        self._last_draw_state = self._draw_state()
+        return await render_update()
+
+    def _draw_state(self):
+        """Everything that changes what the screen looks like.
+
+        Compared frame to frame instead of relying on callers to remember to
+        flag themselves dirty, so a new setting cannot silently freeze the
+        display.
+        """
+        snapshot = self.snapshot
+        view = self.view
+        return (
+            self.screen,
+            snapshot.ts_ms, snapshot.state, snapshot.message,
+            len(snapshot.contacts),
+            self.selected_icao,
+            view.active_sector, view.filter_sector, view.rotation,
+            view.armed_sectors,
+            self.cfg["labels"], self.cfg["radius_km"], self.cfg["units"],
+            self._route_wanted is not None,
+        )
+
+    def _needs_draw(self):
+        # Anything genuinely animating has to redraw every frame.
+        if self._dirty or self.notification is not None or self.overlays:
+            return True
+        if self.screen == SCREEN_SETTINGS:
+            return True  # Menu animates its selection
+        if self.screen == SCREEN_RADAR:
+            if self.cfg["sweep"] or self.view.armed_sectors:
+                return True
+            if self.touch.sector is not None:
+                return True
+        if self._draw_state() != self._last_draw_state:
+            return True
+        # Otherwise only the radar needs a slow tick, for its age counter. The
+        # detail and about pages are static until the data behind them moves.
+        return (self.screen == SCREEN_RADAR
+                and self._since_draw_ms >= IDLE_REDRAW_MS)
 
     async def _connect_wifi(self, render_update):
         self._set_status(model.STATE_CONNECTING, "CONNECTING WIFI")
@@ -499,7 +569,8 @@ class FlightRadarApp(app.App):
             self._route_wanted = contact.callsign
 
     def _settings_changed(self, keys):
-        if "location" in keys or "radius_km" in keys or "provider" in keys:
+        if ("location" in keys or "radius_km" in keys or "provider" in keys
+                or "max_aircraft" in keys):
             self.view.forget_trails()
             self.force_refresh()
         if "display" in keys:
@@ -628,7 +699,7 @@ class FlightRadarApp(app.App):
         if not self.cfg["led_ring"] or not self._leds_owned:
             return
         self._led_timer += delta
-        if self._led_timer < 200:
+        if self._led_timer < LED_INTERVAL_MS:
             return
         self._led_timer = 0
         try:
@@ -636,8 +707,13 @@ class FlightRadarApp(app.App):
         except ImportError:
             self.cfg["led_ring"] = False
             return
-        # The OS pattern generator keeps trying to reclaim the ring.
-        eventbus.emit(PatternDisable())
+
+        # The OS pattern generator keeps trying to reclaim the ring, but once a
+        # second is enough to hold it off.
+        self._pattern_timer += LED_INTERVAL_MS
+        if self._pattern_timer >= PATTERN_SUPPRESS_MS:
+            self._pattern_timer = 0
+            eventbus.emit(PatternDisable())
 
         # Build the frame locally rather than reading LEDs back: the composed
         # NeoPixel wrapper is not guaranteed to support __getitem__.
@@ -667,6 +743,11 @@ class FlightRadarApp(app.App):
             bearing = self.view.screen_bearing(touch.bearing_of(self.touch.sector))
             frame[_led_slot(bearing)] = (200, 200, 200)
 
+        # Writing the ring means bit-banging twelve pixels; skip it entirely
+        # when the frame is identical to the one already up there.
+        if frame == self._led_frame:
+            return
+        self._led_frame = frame
         for i in range(12):
             tildagonos.leds[i + 1] = frame[i]
         tildagonos.leds.write()
@@ -676,6 +757,7 @@ class FlightRadarApp(app.App):
             from tildagonos import tildagonos
         except ImportError:
             return
+        self._led_frame = None
         for i in range(1, 13):
             tildagonos.leds[i] = (0, 0, 0)
         tildagonos.leds.write()

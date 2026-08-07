@@ -22,6 +22,9 @@ RADIUS_STEPS = (5, 10, 20, 40, 80, 160)
 # The fuller list offered in the settings menu.
 RADIUS_CHOICES = (5, 10, 20, 40, 60, 80, 100, 120, 160, 200)
 INTERVAL_CHOICES = (10, 15, 30, 60)
+# Contacts tracked and drawn. The main lever on how hard the app works: each
+# one costs an aircraft outline and a label-placement attempt every redraw.
+MAX_AIRCRAFT_CHOICES = (10, 20, 30, 50)
 LABEL_MODES = ("off", "callsign", "full")
 DISPLAY_TARGETS = ("main", "hexpansion")
 

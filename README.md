@@ -123,6 +123,7 @@ Reached with LEFT from the radar screen.
 | Units | aviation / metric / mixed |
 | Source | adsb.lol / adsb.fi / airplanes.live |
 | Labels | off / callsign / full |
+| Max contacts | 10 / 20 / 30 / 50 |
 | Sweep, Trails, LED ring | on / off |
 | Touch | off / scrub / alerts / filter / course-up (2026 badge) |
 | Display | main screen or hexpansion slot 1–6 |
@@ -173,6 +174,39 @@ foreground; minimising it stops the requests.
 The optional IP-based location estimate uses [ip-api.com](http://ip-api.com/),
 which is free for non-commercial use. It is city-level accurate at best, so those
 locations are shown with a `~` prefix.
+
+## Resource use
+
+The scope is redrawn **on demand, not on a timer**. Data arrives every 15
+seconds, so redrawing at the scheduler's full rate was almost entirely wasted
+work. SkyScope compares what would actually appear on screen against what is
+already there and only redraws when it differs, with a slow one-per-second tick
+so the "updated N seconds ago" counter stays honest, and full-rate drawing only
+while something is genuinely animating — a menu, a notification, the sweep,
+armed-alert pulsing, or a finger on the touch ring.
+
+Measured in the simulator, quiet sky:
+
+| | draws/sec | ctx calls/sec |
+|---|---|---|
+| Before | 15.3 | 4,660 |
+| After | 1.0 | 271 |
+
+The saving grows with traffic: over Heathrow with 30 contacts on an 80 km scope
+it is about 1,300 ctx calls a second against roughly 11,000 before. The LED ring
+is only written when the frame actually changes, and the OS pattern generator is
+told to stay off once a second rather than five times.
+
+If you still want it lighter, in order of effect:
+
+| Setting | Lighter | Why |
+|---|---|---|
+| **Max contacts** | 10 or 20 | Each contact is an aircraft outline plus a label-placement attempt on every redraw. The biggest single lever. |
+| **Update** | 30 s or 60 s | Fewer requests, less parsing, less radio time — the main battery cost. |
+| **Radius** | smaller | A smaller circle returns a much smaller response to parse. |
+| **Labels** | callsign or off | Skips the text and the collision search. |
+| **Sweep / Trails** | off (default) | Sweep forces continuous full-rate redrawing. |
+| **LED ring** | off | Stops the ring being driven at all. |
 
 ## Memory
 

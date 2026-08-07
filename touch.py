@@ -74,6 +74,9 @@ class TouchRing:
     def __init__(self):
         self.available = False
         self.sector = None          # sector under a finger right now
+        # Why the ring is unavailable, for the about page. Not printed: a 2024
+        # badge having no touch hardware is normal, not a fault worth logging.
+        self.reason = ""
         self._states = None
         self._keys = ()
         self._held_ms = 0
@@ -85,6 +88,7 @@ class TouchRing:
             from frontboards.utils import detect_frontboard
 
             if (detect_frontboard() & 0xFF00) != 0x2600:
+                self.reason = "2026 badge only"
                 return
             from frontboards.twentysix import TwentyTwentySix
 
@@ -96,10 +100,11 @@ class TouchRing:
             # of range later, so check the keys really are there.
             for key in self._keys:
                 if key not in self._states:
+                    self.reason = "no touch pads"
                     return
             self.available = True
         except Exception as exc:  # no touch hardware, or a firmware without it
-            print("[skyscope] touch ring unavailable:", exc)
+            self.reason = str(exc)[:24]
 
     def _touched_sector(self):
         states = self._states
