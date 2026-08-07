@@ -18,6 +18,7 @@ class RecordingRenderer:
     def __init__(self):
         self.calls = []
         self.flushed = 0
+        self.batches = 0
 
     def clear(self, rgb):
         self.calls.append(("clear", rgb))
@@ -30,6 +31,13 @@ class RecordingRenderer:
 
     def poly(self, pts, rgb, fill=True, w=1):
         self.calls.append(("poly", tuple(pts), rgb, fill))
+
+    def polys(self, shapes, rgb, fill=True, w=1):
+        # Recorded as individual polys so tests can keep counting shapes,
+        # while `batches` exposes how many draw calls the backend really got.
+        self.batches += 1
+        for pts in shapes:
+            self.poly(pts, rgb, fill, w)
 
     def text(self, s, x, y, rgb, size=12, align="left"):
         self.calls.append(("text", s, x, y, rgb, size, align))
@@ -45,7 +53,7 @@ class RecordingRenderer:
     def texts(self):
         return [c[1] for c in self.calls if c[0] == "text"]
 
-    def polys(self):
+    def poly_calls(self):
         return [c for c in self.calls if c[0] == "poly"]
 
     def rings(self):
@@ -114,7 +122,7 @@ class TestContactPlacement(unittest.TestCase):
         self.r = RecordingRenderer()
 
     def _glyph_centre(self):
-        poly = self.r.polys()[0]
+        poly = self.r.poly_calls()[0]
         xs = [p[0] for p in poly[1]]
         ys = [p[1] for p in poly[1]]
         return sum(xs) / len(xs), sum(ys) / len(ys)
@@ -140,7 +148,7 @@ class TestContactPlacement(unittest.TestCase):
     def test_contacts_beyond_the_radius_are_not_drawn(self):
         snap = snapshot_with([contact_at("FAR", 45.0, 90.0)], radius_km=40.0)
         self.view.draw(self.r, snap)
-        self.assertEqual(self.r.polys(), [])
+        self.assertEqual(self.r.poly_calls(), [])
         self.assertNotIn("FAR", self.r.texts())
 
 
@@ -193,7 +201,7 @@ class TestLabels(unittest.TestCase):
     def test_all_contacts_still_get_a_glyph(self):
         self.cfg["label_count"] = 3
         self.view.draw(self.r, snapshot_with(self.contacts))
-        self.assertEqual(len(self.r.polys()), 10)
+        self.assertEqual(len(self.r.poly_calls()), 10)
 
     def test_labels_off_hides_every_label(self):
         self.cfg["labels"] = "off"
@@ -312,9 +320,9 @@ class TestEndToEnd(unittest.TestCase):
         snap = model.Snapshot(contacts, 1000, model.STATE_OK, "", total,
                               OBS[0], OBS[1], cfg["radius_km"])
         view.draw(r, snap, age_s=2)
-        self.assertTrue(len(r.polys()) >= 3)
+        self.assertTrue(len(r.poly_calls()) >= 3)
         # Every glyph must sit inside the outer ring.
-        for poly in r.polys():
+        for poly in r.poly_calls():
             for x, y in poly[1]:
                 self.assertLess((x * x + y * y) ** 0.5, radar_view.R_SCREEN + 12)
 

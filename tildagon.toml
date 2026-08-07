@@ -11,7 +11,7 @@ author = "TimNe0"
 license = "MIT"
 url = "https://github.com/TimNe0/skyscope"
 description = "Live ADS-B flight radar: set location + range, see nearby aircraft on a radar scope."
-version = "0.2.1"
+version = "0.3.0"
 
 
 

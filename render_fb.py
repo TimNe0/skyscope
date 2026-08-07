@@ -201,6 +201,12 @@ class FbRenderer:
             pass
         _midpoint_circle(self.fb, cx, cy, radius, colour, fill)
 
+    def polys(self, shapes, rgb, fill=True, w=1):
+        # framebuf has no multi-subpath path, so this is just a loop; the
+        # batching only buys anything on the vector backend.
+        for pts in shapes:
+            self.poly(pts, rgb, fill, w)
+
     def poly(self, pts, rgb, fill=True, w=1):
         colour = rgb565(rgb, self.swap)
         try:

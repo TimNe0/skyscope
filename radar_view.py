@@ -38,16 +38,18 @@ TRAIL_MAX = 5
 
 # Top-down airliner silhouette, nose towards -y, about 14 px across the wings.
 # Traced once round the outline: nose, down the right side of the fuselage, out
-# and back along the right wing, the right tailplane, across the tail, then the
+# to the right wingtip and back, the right tailplane, across the tail, then the
 # mirror image up the left side.
+#
+# Ten points rather than the eighteen this started as. Swept edges read as a
+# plane just as well at this size, and every point is a line_to that ctx has to
+# rasterise for every aircraft on screen -- with thirty contacts the glyphs were
+# most of the frame.
 _PLANE_OUTLINE = (
-    (0.0, -7.5), (1.0, -5.0), (1.0, -1.6),
-    (7.0, 1.4), (7.0, 2.8), (1.0, 1.4),
-    (1.0, 4.4), (3.0, 6.2), (3.0, 7.2),
-    (0.0, 5.8),
-    (-3.0, 7.2), (-3.0, 6.2), (-1.0, 4.4),
-    (-1.0, 1.4), (-7.0, 2.8), (-7.0, 1.4),
-    (-1.0, -1.6), (-1.0, -5.0),
+    (0.0, -7.5),
+    (1.2, -1.4), (7.0, 2.0), (1.2, 3.4),
+    (3.0, 6.6), (0.0, 5.4), (-3.0, 6.6),
+    (-1.2, 3.4), (-7.0, 2.0), (-1.2, -1.4),
 )
 
 
@@ -284,29 +286,42 @@ class RadarView:
             # cover all of them -- that is the point of filtering.
             label_count = len(drawn) if mode != "off" else 0
 
-        # Glyphs first, so labels always sit on top of them.
+        # Glyphs first, so labels always sit on top of them. They are gathered
+        # by colour and drawn in one path per colour rather than one per
+        # aircraft, which is where most of the per-frame cost used to go.
         placed = _reserved_boxes()
         positions = []
+        live = []
+        stale = []
+        chosen = []
         for c in drawn:
             screen_b = self.screen_bearing(c.bearing)
             x, y = geo.polar_to_screen(c.dist_km, screen_b, radius_km, R_SCREEN)
             positions.append((x, y))
-            is_sel = selected is not None and c.icao == selected
-            colour = CONTACT_STALE if c.stale else CONTACT
-            if is_sel:
-                colour = SELECT
-                r.circle(x, y, 9, SELECT)
 
             # The plane points along its track as drawn, so it turns with the
             # scope in course-up mode. The silhouette shows heading on its own,
             # which is why there is no separate heading vector.
             track = self.screen_bearing(c.track_deg) if c.track_deg is not None else 0.0
-            r.poly([(x + rx, y + ry) for rx, ry in plane_glyph(track)],
-                   colour, fill=True)
+            shape = [(x + rx, y + ry) for rx, ry in plane_glyph(track)]
+            if selected is not None and c.icao == selected:
+                r.circle(x, y, 9, SELECT)
+                chosen.append(shape)
+            elif c.stale:
+                stale.append(shape)
+            else:
+                live.append(shape)
 
             # Every glyph reserves its own space, so a label never lands on
             # another aircraft.
             placed.append((x - 8, y - 8, x + 8, y + 8))
+
+        if live:
+            r.polys(live, CONTACT, fill=True)
+        if stale:
+            r.polys(stale, CONTACT_STALE, fill=True)
+        if chosen:
+            r.polys(chosen, SELECT, fill=True)
 
         # drawn is sorted by distance, so this labels the nearest aircraft first
         # and gives up on any whose block would collide with one already drawn --

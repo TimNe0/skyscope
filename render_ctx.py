@@ -59,14 +59,29 @@ class CtxRenderer:
             ctx.stroke()
 
     def poly(self, pts, rgb, fill=True, w=1):
-        if len(pts) < 2:
-            return
+        self.polys((pts,), rgb, fill, w)
+
+    def polys(self, shapes, rgb, fill=True, w=1):
+        """Draw several shapes of one colour as a single path.
+
+        Thirty aircraft drawn one at a time meant thirty colour changes, thirty
+        path setups and thirty fills. As subpaths of one path it is one of each,
+        which is most of the per-frame saving on a busy scope.
+        """
         ctx = self.ctx
-        ctx.rgb(*rgb).begin_path()
-        ctx.move_to(pts[0][0], pts[0][1])
-        for i in range(1, len(pts)):
-            ctx.line_to(pts[i][0], pts[i][1])
-        ctx.close_path()
+        started = False
+        for pts in shapes:
+            if len(pts) < 2:
+                continue
+            if not started:
+                ctx.rgb(*rgb).begin_path()
+                started = True
+            ctx.move_to(pts[0][0], pts[0][1])
+            for i in range(1, len(pts)):
+                ctx.line_to(pts[i][0], pts[i][1])
+            ctx.close_path()
+        if not started:
+            return
         if fill:
             ctx.fill()
         else:

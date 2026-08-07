@@ -19,7 +19,7 @@ import json
 
 from . import geo, model
 
-DEFAULT_UA = "SkyScope-Tildagon/0.2.1 (+https://github.com/TimNe0/skyscope)"
+DEFAULT_UA = "SkyScope-Tildagon/0.3.0 (+https://github.com/TimNe0/skyscope)"
 
 # adsb.lol caps radius requests at 250 nm; we cap much lower to protect memory.
 MAX_RADIUS_NM = 100
@@ -89,28 +89,51 @@ def _next_structural(text, i):
 def iter_aircraft(text):
     """Yield the JSON source of each aircraft object, one at a time.
 
-    Uses find() to hop between structural characters rather than stepping
-    through every byte, so a 130 KB payload costs a few thousand iterations
-    instead of a hundred thousand.
+    Hops between structural characters with find() rather than stepping through
+    every byte. The four marker positions are carried between iterations and
+    only re-found once passed: find() costs the distance it travels, so looking
+    up all four every step made this scan an 80 KB payload roughly ninety times
+    over. Carrying them makes each marker cross the text once.
     """
     i = _find_array(text)
     if i < 0:
         return
+    quote = text.find('"', i)
+    opener = text.find("{", i)
+    closer = text.find("}", i)
+    bracket = text.find("]", i)
     depth = 0
     start = -1
     while True:
-        j = _next_structural(text, i)
+        if 0 <= quote < i:
+            quote = text.find('"', i)
+        if 0 <= opener < i:
+            opener = text.find("{", i)
+        if 0 <= closer < i:
+            closer = text.find("}", i)
+        if 0 <= bracket < i:
+            bracket = text.find("]", i)
+
+        # Nearest marker wins. Written out rather than min() over a tuple to
+        # avoid allocating one per iteration on the badge.
+        j = quote
+        if opener >= 0 and (j < 0 or opener < j):
+            j = opener
+        if closer >= 0 and (j < 0 or closer < j):
+            j = closer
+        if bracket >= 0 and (j < 0 or bracket < j):
+            j = bracket
         if j < 0:
             return
-        ch = text[j]
-        if ch == '"':
+
+        if j == quote:
             i = _skip_string(text, j)
-        elif ch == "{":
+        elif j == opener:
             if depth == 0:
                 start = j
             depth += 1
             i = j + 1
-        elif ch == "}":
+        elif j == closer:
             depth -= 1
             i = j + 1
             if depth <= 0 and start >= 0:

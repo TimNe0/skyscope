@@ -20,7 +20,7 @@ from . import adsb, conf as C, fixtures, model, radar_view, routes, touch, units
 from .render_ctx import CtxRenderer
 from .settings_view import SettingsView
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 USER_AGENT = "SkyScope-Tildagon/%s (+https://github.com/TimNe0/skyscope)" % VERSION
 
 SCREEN_RADAR = 0
@@ -42,6 +42,9 @@ IDLE_REDRAW_MS = 1000
 LED_INTERVAL_MS = 200
 # The OS pattern generator has to be told repeatedly to keep off the ring.
 PATTERN_SUPPRESS_MS = 1000
+# Generous: the request itself already has a 10 s timeout, so this only fires
+# if the worker thread died without unwinding.
+FETCH_WATCHDOG_MS = 45000
 
 
 class FlightRadarApp(app.App):
@@ -82,6 +85,11 @@ class FlightRadarApp(app.App):
         # the only situation where falling back to demo data is honest.
         self._allow_demo = False
         self._demo = None
+        # The network fetch runs on a worker thread; these are the only things
+        # it touches. Nothing else may be shared with it.
+        self._fetch_busy = False
+        self._fetch_result = None
+        self._fetch_started_ms = 0
         self._led_timer = 0
         self._pattern_timer = 0
         # Last frame written to the ring, so unchanged frames cost no I/O.
@@ -150,11 +158,25 @@ class FlightRadarApp(app.App):
                 self._route_wanted = None
                 self.routes.fetch(callsign, user_agent=USER_AGENT)
 
+            # A finished fetch is folded in here, on the main task, so the
+            # worker never touches anything the UI is reading.
+            result = self._fetch_result
+            if result is not None:
+                self._fetch_result = None
+                self._apply_result(result)
+            elif self._fetch_busy and time.ticks_diff(
+                    now, self._fetch_started_ms) > FETCH_WATCHDOG_MS:
+                # A worker that dies hard -- a stack overflow inside TLS, say --
+                # never clears the flag, and polling would stop for good. This
+                # is the only way back from that on hardware.
+                print("[skyscope] fetch worker lost, resetting")
+                self._fetch_busy = False
+                self._on_error("FETCH TIMED OUT")
+
             foreground = getattr(self, "_foreground", True)
-            if foreground and self._poll_due(now):
+            if foreground and not self._fetch_busy and self._poll_due(now):
                 self.snapshot.state = model.STATE_UPDATING
-                await self._render(render_update)
-                self._poll(time.ticks_ms())
+                self._start_poll()
 
             if not foreground:
                 # render_update blocks until the app is on screen again, which
@@ -268,28 +290,63 @@ class FlightRadarApp(app.App):
             self._backoff_s = min(self._backoff_s * 2, MAX_BACKOFF_S)
         self._schedule_next(time.ticks_ms(), self._backoff_s)
 
-    def _poll(self, now):
+    def _start_poll(self):
+        """Kick off a fetch on a worker thread and return immediately.
+
+        A TLS request plus parse takes seconds on an ESP32, and doing it inline
+        froze the whole app -- no buttons, no redraw -- for that entire time.
+        MicroPython releases the interpreter lock around socket waits, so a
+        worker keeps the UI alive. Falls back to fetching inline where threads
+        are unavailable.
+        """
+        if self._fetch_busy:
+            return
+        self._fetch_busy = True
+        self._fetch_started_ms = time.ticks_ms()
+        # Snapshot the query now: settings may change while the fetch runs, and
+        # results must be matched to the location they were requested for.
         cfg = self.cfg
         lat, lon = C.location_of(cfg)
-        radius_km = cfg["radius_km"]
-        provider = self._provider()
+        job = (self._provider(), lat, lon, cfg["radius_km"], cfg["max_aircraft"])
+        try:
+            import _thread
+
+            _thread.start_new_thread(self._fetch_worker, (job,))
+            return
+        except Exception:
+            # No threads, or the spawn failed: do it inline rather than not
+            # at all.
+            self._fetch_worker(job)
+
+    def _fetch_worker(self, job):
+        """Runs on the worker thread. Touches only _fetch_result/_fetch_busy."""
+        provider, lat, lon, radius_km, max_aircraft = job
         try:
             contacts, total = provider.poll(
                 lat, lon, radius_km, user_agent=USER_AGENT
             )
+            contacts = model.prepare(contacts, lat, lon, radius_km, max_aircraft)
+            self._fetch_result = ("ok", contacts, total, lat, lon, radius_km)
         except adsb.ProviderError as exc:
-            gc.collect()
-            self._on_error(exc.message)
-            return
+            self._fetch_result = ("error", exc.message)
         except MemoryError:
-            gc.collect()
-            self._on_error("OUT OF MEMORY")
-            return
+            self._fetch_result = ("error", "OUT OF MEMORY")
+        except Exception as exc:
+            print("[skyscope] fetch worker failed:", exc)
+            self._fetch_result = ("error", adsb._short_error(exc))
+        finally:
+            self._fetch_busy = False
 
-        contacts = model.prepare(contacts, lat, lon, radius_km, cfg["max_aircraft"])
+    def _apply_result(self, result):
+        """Fold a finished fetch into the app state, on the main task."""
+        if result[0] != "ok":
+            gc.collect()
+            self._on_error(result[1])
+            return
+        _kind, contacts, total, lat, lon, radius_km = result
         self.snapshot = model.Snapshot(
             contacts=contacts,
-            ts_ms=now,
+            ts_ms=time.ticks_ms(),
             state=model.STATE_OK,
             message=self._demo.name if self._demo else "",
             total=total,
@@ -299,7 +356,7 @@ class FlightRadarApp(app.App):
         )
         self._errors = 0
         self._backoff_s = 0
-        self._schedule_next(now, cfg["interval_s"])
+        self._schedule_next(time.ticks_ms(), self.cfg["interval_s"])
         self._check_alerts()
         if self._active_sector is not None:
             # Keep the touched sector's selection on the aircraft that is

@@ -177,6 +177,26 @@ locations are shown with a `~` prefix.
 
 ## Resource use
 
+**The network fetch runs on a worker thread.** A TLS request plus parse takes
+seconds on an ESP32, and doing it on the main task froze everything — no button
+presses, no redraw — for that whole time. MicroPython releases the interpreter
+lock around socket waits, so a worker keeps the app alive; the result is handed
+back through a single slot and folded in by the main task, which is the only
+thing that touches app state. Where threads are unavailable it falls back to
+fetching inline, and a watchdog recovers if a worker ever dies without
+unwinding.
+
+Measured in the simulator, worst gap between input polls — which is how long a
+button press can go unnoticed:
+
+| | worst stall | 2nd worst |
+|---|---|---|
+| Fetching inline | 5.36 s | 2.78 s |
+| On a worker | **0.28 s** | 0.25 s |
+
+On a badge the inline figure is far worse, because mbedTLS is much slower there
+than on a desktop.
+
 The scope is redrawn **on demand, not on a timer**. Data arrives every 15
 seconds, so redrawing at the scheduler's full rate was almost entirely wasted
 work. SkyScope compares what would actually appear on screen against what is
@@ -193,9 +213,16 @@ Measured in the simulator, quiet sky:
 | After | 1.0 | 271 |
 
 The saving grows with traffic: over Heathrow with 30 contacts on an 80 km scope
-it is about 1,300 ctx calls a second against roughly 11,000 before. The LED ring
-is only written when the frame actually changes, and the OS pattern generator is
-told to stay off once a second rather than five times.
+it is about 790 ctx calls a second against roughly 11,000 before. Aircraft are
+gathered by colour and drawn as one path per colour rather than one per
+aircraft, which halved the cost of a busy frame. The LED ring is only written
+when the frame actually changes, and the OS pattern generator is told to stay
+off once a second rather than five times.
+
+The response parser carries its four scan markers between iterations instead of
+re-finding them each step. `str.find` costs the distance it travels, so looking
+all four up every time made an 80 KB payload get scanned about ninety times
+over; it is now under four.
 
 If you still want it lighter, in order of effect:
 
